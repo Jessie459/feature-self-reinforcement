@@ -37,7 +37,6 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--backbone", type=str, default="vit_base_patch16_224")
 parser.add_argument("--drop_path_rate", type=float, default=0.1)
 parser.add_argument("--cls_depth", type=int, default=2)
-parser.add_argument("--init_values", type=float, default=0.1)
 parser.add_argument("--out_dim", type=int, default=4096)
 
 parser.add_argument("--data_folder", default=os.path.expanduser("~/data/VOCdevkit/VOC2012"), type=str)
@@ -50,12 +49,12 @@ parser.add_argument("--ignore_index", default=255, type=int)
 
 parser.add_argument("--spg", default=2, type=int, help="samples per GPU")
 
-parser.add_argument("--optimizer", default="PolyWarmupAdamW", type=str)
-parser.add_argument("--lr", default=6e-5, type=float)
-parser.add_argument("--warmup_lr", default=1e-6, type=float)
-parser.add_argument("--weight_decay", default=1e-2, type=float)
-parser.add_argument("--betas", default=(0.9, 0.999))
-parser.add_argument("--power", default=0.9, type=float)
+parser.add_argument("--optimizer", type=str, default="CosWarmupAdamW")
+parser.add_argument("--lr", type=float, default=6e-5)
+parser.add_argument("--lr_scale", type=float, default=10.0)
+parser.add_argument("--warmup_ratio", type=float, default=0.1)
+parser.add_argument("--weight_decay", type=float, default=0.05)
+parser.add_argument("--betas", nargs="+", default=(0.9, 0.999))
 
 parser.add_argument("--max_iters", default=20000, type=int)
 parser.add_argument("--log_iters", default=200, type=int)
@@ -85,19 +84,17 @@ parser.add_argument("--global_crops_number", type=int, default=2)
 parser.add_argument("--local_crops_number", type=int, default=0)
 
 # knowledge distillation
-parser.add_argument("--momentum", type=float, default=0.996)
+parser.add_argument("--momentum", type=float, default=0.9995,
+                    help="If EMA the entire encoder, set momentum to a small value")
 
 # masked image modeling parameters
-parser.add_argument("--use_mim", type=str2bool, default=False)
+parser.add_argument("--use_mim", type=str2bool, default=True)
 parser.add_argument("--block_size", type=int, default=64)
-parser.add_argument("--mask_ratio", type=float, default=0.0)
-parser.add_argument("--mask_strategy", type=str, default="uncertain", choices=["random", "uncertain"])
+parser.add_argument("--mask_ratio", type=float, default=0.4)
 
-parser.add_argument("--w_class", type=float, default=0.0)
-parser.add_argument("--w_patch", type=float, default=0.0)
+parser.add_argument("--w_class", type=float, default=0.1)
+parser.add_argument("--w_patch", type=float, default=0.1)
 parser.add_argument("--fsr_iters", type=int, default=20000)
-
-parser.add_argument("--transform", type=str, default="dino", choices=["dino", "orig"])
 
 parser.add_argument("--use_aa", type=str2bool, default=False)
 parser.add_argument("--use_gauss", type=str2bool, default=False)
@@ -222,28 +219,27 @@ def train(args):
             },
             {
                 "params": param_groups[2],
-                "lr": args.lr * 10,
+                "lr": args.lr * args.lr_scale,
                 "weight_decay": 0,
             },
             {
                 "params": param_groups[3],
-                "lr": args.lr * 10,
+                "lr": args.lr * args.lr_scale,
                 "weight_decay": args.weight_decay,
             },
         ],
         lr=args.lr,
         weight_decay=args.weight_decay,
         betas=args.betas,
-        warmup_iter=args.warmup_iters,
-        max_iter=args.max_iters,
-        warmup_ratio=args.warmup_lr,
-        power=args.power,
+        max_iters=args.max_iters,
+        warmup_iters=args.warmup_iters,
+        warmup_ratio=args.warmup_ratio,
     )
 
     student.cuda()
     teacher.cuda()
     if args.dist:
-        student = DistributedDataParallel(student, device_ids=[args.local_rank], find_unused_parameters=True)
+        student = DistributedDataParallel(student, device_ids=[args.local_rank], find_unused_parameters=args.find_unused_parameters)
         student_wo_ddp = student.module
     else:
         student_wo_ddp = student
@@ -302,7 +298,14 @@ def train(args):
     )
 
     # ============ preparing loss ... ============
-    fsr_loss_func = FSRLoss(args.out_dim, student_temp=0.1, teacher_temp=0.04).cuda()
+    fsr_loss_func = FSRLoss(
+        out_dim=args.out_dim,
+        warmup_teacher_temp=0.04,
+        teacher_temp=0.07,
+        student_temp=0.1,
+        warmup_epochs=int(args.max_iters / 8),
+        epochs=args.max_iters,
+    ).cuda()
     loss_layer = DenseEnergyLoss(weight=1e-7, sigma_rgb=15, sigma_xy=100, scale_factor=0.5)
 
     # ============ init schedulers ... ============
@@ -310,10 +313,6 @@ def train(args):
     _schedule = np.repeat(1.0, args.max_iters - args.fsr_iters)
     momentum_schedule = np.concatenate([momentum_schedule, _schedule], axis=0)
 
-    # if args.tsd_schedule == "cosine":
-    #     w_class_schedule = cosine_scheduler(args.w_class, 0.0, args.fsr_iters)
-    #     w_patch_schedule = cosine_scheduler(args.w_patch, 0.0, args.fsr_iters)
-    # else:
     w_class_schedule = np.repeat(args.w_class, args.fsr_iters)
     w_patch_schedule = np.repeat(args.w_patch, args.fsr_iters)
     _schedule = np.repeat(0.0, args.max_iters - args.fsr_iters)
@@ -340,23 +339,19 @@ def train(args):
     for n_iter in range(args.max_iters):
         global_step = n_iter + 1
         try:
-            _, inputs, img_box, cls_labels, images = next(train_loader_iter)
+            _, images, cls_labels = next(train_loader_iter)
         except:
             if sampler is not None:
                 sampler.set_epoch(np.random.randint(args.max_iters))
             train_loader_iter = iter(train_loader)
-            _, inputs, img_box, cls_labels, images = next(train_loader_iter)
+            _, images, cls_labels = next(train_loader_iter)
 
-        if args.transform == "orig":
-            images[0] = inputs
-        else:
-            img_box = None
         images = [x.cuda(non_blocking=True) for x in images]
         cls_labels = cls_labels.cuda(non_blocking=True)
 
         # generate random mask
         if args.use_mim:
-            mask_strategy = "random" if (n_iter + 1) <= 5000 else args.mask_strategy
+            mask_strategy = "random" if (n_iter + 1) <= args.max_iters // 5 else "uncertain"
             _cam, _aux_cam = multi_scale_cam(student, images[1], scales=args.cam_scales)
             mask2 = mask_generator(_aux_cam, cls_labels, 0.2, 0.7, mask_strategy)
             mask1 = torch.zeros_like(mask2)
@@ -385,7 +380,7 @@ def train(args):
             valid_cam1, _ = cam_to_label(
                 cam1,
                 cls_labels,
-                img_box=img_box,
+                img_box=None,
                 ignore_mid=True,
                 high_thre=args.high_thre,
                 low_thre=args.low_thre,
@@ -406,7 +401,7 @@ def train(args):
                 images_denorm1,
                 cams=valid_cam1,
                 cls_labels=cls_labels,
-                img_box=img_box,
+                img_box=None,
                 high_thre=args.high_thre,
                 low_thre=args.low_thre,
                 ignore_index=args.ignore_index,
@@ -427,7 +422,7 @@ def train(args):
         seg_loss = get_seg_loss(seg_pred, pseudo_label1.long(), ignore_index=args.ignore_index)
 
         # segmentation regularization loss
-        reg_loss = get_energy_loss(img=images[0], logit=seg_pred, label=pseudo_label1, img_box=img_box, loss_layer=loss_layer)
+        reg_loss = get_energy_loss(img=images[0], logit=seg_pred, label=pseudo_label1, img_box=None, loss_layer=loss_layer)
 
         # affinity loss
         fmap = outputs["top_fmap"]
@@ -435,7 +430,7 @@ def train(args):
         _, pseudo_label_aux = cam_to_label(
             resized_aux_cam.detach(),
             cls_labels,
-            img_box=img_box,
+            img_box=None,
             ignore_mid=True,
             high_thre=args.high_thre,
             low_thre=args.low_thre,
@@ -449,6 +444,7 @@ def train(args):
             teacher_output=teacher_outputs["project_out"],
             student_output=student_outputs["project_out"],
             student_mask=mask,
+            epoch=n_iter,
         )
 
         w_class = w_class_schedule[n_iter]

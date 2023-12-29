@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn as nn
@@ -8,40 +9,38 @@ def is_distributed():
     return dist.is_available() and dist.is_initialized()
 
 
-@torch.no_grad()
-def concat_all_gather(tensor):
-    tensor_list = [torch.zeros_like(tensor) for _ in range(dist.get_world_size())]
-    dist.all_gather(tensor_list, tensor)
-    return torch.cat(tensor_list, dim=0)
-
-
 class FSRLoss(nn.Module):
     def __init__(
         self,
         out_dim,
-        teacher_temp=0.04,
+        warmup_teacher_temp=0.04,
+        teacher_temp=0.07,
         student_temp=0.1,
         momentum=0.9,
         num_gcrops=2,
         num_lcrops=0,
+        warmup_epochs=None,
+        epochs=None,
     ):
         super().__init__()
         self.student_temp = student_temp
-        self.teacher_temp = teacher_temp
+        self.teacher_temp = np.concatenate((
+            np.linspace(warmup_teacher_temp, teacher_temp, warmup_epochs),
+            np.ones(epochs - warmup_epochs) * teacher_temp,
+        ))
         self.momentum = momentum
-
         self.num_gcrops = num_gcrops
         self.num_lcrops = num_lcrops
 
         self.register_buffer("class_center", torch.zeros(1, out_dim))
         self.register_buffer("patch_center", torch.zeros(1, 1, out_dim))
 
-    def forward(self, teacher_output, student_output, student_mask=None):
-        class_loss = self.forward_class(teacher_output, student_output)
-        patch_loss = self.forward_patch(teacher_output, student_output, student_mask)
+    def forward(self, teacher_output, student_output, student_mask=None, epoch=None):
+        class_loss = self.forward_class(teacher_output, student_output, student_mask, epoch)
+        patch_loss = self.forward_patch(teacher_output, student_output, student_mask, epoch)
         return class_loss, patch_loss
 
-    def forward_patch(self, teacher_output, student_output, student_mask=None):
+    def forward_patch(self, teacher_output, student_output, student_mask=None, epoch=None):
         if student_mask is None:
             return torch.tensor(0.0).to(student_output.device)
 
@@ -49,7 +48,7 @@ class FSRLoss(nn.Module):
         student_value = student_patch / self.student_temp
         with torch.no_grad():
             teacher_patch = teacher_output.chunk(2)[1][:, 1:]
-            teacher_value = (teacher_patch - self.patch_center) / self.teacher_temp
+            teacher_value = (teacher_patch - self.patch_center) / self.teacher_temp[epoch]
 
         mask = student_mask.chunk(2)[1].float().flatten(1)
         loss = torch.sum(-F.softmax(teacher_value, dim=-1) * F.log_softmax(student_value, dim=-1), dim=-1)
@@ -59,20 +58,19 @@ class FSRLoss(nn.Module):
         self.update_patch_center(teacher_patch)
         return loss
 
-    def forward_class(self, teacher_output, student_output):
-        student_class_temp = student_output[:, 0] / self.student_temp
-        student_class_list = student_class_temp.chunk(2)
+    def forward_class(self, teacher_output, student_output, student_mask=None, epoch=None):
+        student_class = student_output.chunk(2)[1][:, 0]
+        student_value = student_class / self.student_temp
         with torch.no_grad():
-            teacher_class_temp = (teacher_output[:, 0] - self.class_center) / self.teacher_temp
-            teacher_class_list = teacher_class_temp.chunk(2)
+            teacher_class = teacher_output.chunk(2)[0][:, 0]
+            teacher_value = (teacher_class - self.class_center) / self.teacher_temp[epoch]
 
-        t = teacher_class_list[0]
-        s = student_class_list[1]
-        loss = torch.sum(-F.softmax(t, dim=-1) * F.log_softmax(s, dim=-1), dim=-1)
+        loss = torch.sum(-F.softmax(teacher_value, dim=-1) * F.log_softmax(student_value, dim=-1), dim=-1)
         loss = loss.mean()
 
-        self.update_class_center(teacher_output.chunk(self.num_gcrops)[0][:, 0])
+        self.update_class_center(teacher_class)
         return loss
+
 
     @torch.no_grad()
     def update_patch_center(self, teacher_output):

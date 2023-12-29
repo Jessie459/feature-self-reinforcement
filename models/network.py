@@ -106,7 +106,6 @@ def build_model(args, pretrained=False):
         pretrained=pretrained,
         img_size=args.input_size,
         cls_depth=args.cls_depth,
-        init_values=args.init_values,
         drop_path_rate=args.drop_path_rate,
     )
     decoder = LargeFOV(encoder.embed_dim, args.num_classes)

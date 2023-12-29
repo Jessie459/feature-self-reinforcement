@@ -116,13 +116,12 @@ class VOC12ClsDataset(VOC12Dataset):
     def __getitem__(self, index):
         name = self.name_list[index]
         pil_image = pil_loader(os.path.join(self.img_dir, name + ".jpg"))
-        img, img_box = self.transform_image(pil_image)
         images = self.transform(pil_image)  # 2 global crops and several local crops
 
         cls_label = self.cls_label_dict[name]
         cls_label = torch.from_numpy(cls_label).long()
 
-        return name, img, img_box, cls_label, images
+        return name, images, cls_label
 
 
 class VOC12SegDataset(VOC12Dataset):
