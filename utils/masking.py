@@ -7,11 +7,12 @@ import torch.nn.functional as F
 
 
 class MaskGenerator:
-    def __init__(self, input_size=224, patch_size=16, block_size=32, mask_ratio=0.75):
+    def __init__(self, input_size=224, patch_size=16, block_size=32, mask_ratio=0.75, mode="nearest"):
         self.input_size = input_size
         self.patch_size = patch_size
         self.mask_ratio = mask_ratio
         self.block_size = block_size
+        self.mode = mode
 
         assert self.input_size % self.block_size == 0
         self.mask_size = self.input_size // self.block_size
@@ -31,7 +32,7 @@ class MaskGenerator:
             cam = cam * cls_label.unsqueeze(-1).unsqueeze(-1)
             cam = torch.max(cam, dim=1)[0]  # (B, H, W)
             roi = torch.logical_and(cam > low_thresh, cam < high_thresh)  # (B, H, W)
-            roi = F.interpolate(roi.float().unsqueeze(1), size=[self.mask_size, self.mask_size], mode="nearest")
+            roi = F.interpolate(roi.float().unsqueeze(1), size=[self.mask_size, self.mask_size], mode=self.mode)
             roi = roi.reshape(B, -1).bool()
             noise[roi] += 1
 

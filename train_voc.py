@@ -14,19 +14,33 @@ from tqdm import tqdm
 
 import datasets.voc as voc
 from losses import FSRLoss
-from models.losses import (DenseEnergyLoss, get_energy_loss,
-                           get_masked_ptc_loss, get_seg_loss)
+from models.losses import (
+    DenseEnergyLoss,
+    get_energy_loss,
+    get_masked_ptc_loss,
+    get_seg_loss,
+)
 from models.network import build_model
 from models.PAR import PAR
 from transforms import MultiviewTransform
 from utils import evaluate, imutils, optim
-from utils.camutils import (cam_to_label, label_to_aff_mask, multi_scale_cam,
-                            refine_cams_with_bkg_v2)
+from utils.camutils import (
+    cam_to_label,
+    label_to_aff_mask,
+    multi_scale_cam,
+    refine_cams_with_bkg_v2,
+)
 from utils.distutils import reduce_tensor, setup_distributed
 from utils.masking import MaskGenerator
-from utils.pyutils import (AverageMeter, cal_eta, cosine_scheduler,
-                           fix_random_seed, format_tabs, setup_logger,
-                           str2bool)
+from utils.pyutils import (
+    AverageMeter,
+    cal_eta,
+    cosine_scheduler,
+    fix_random_seed,
+    format_tabs,
+    setup_logger,
+    str2bool,
+)
 from utils.tbutils import make_grid_image, make_grid_label
 
 torch.hub.set_dir("./pretrained")
@@ -41,7 +55,7 @@ parser.add_argument("--out_dim", type=int, default=4096)
 
 parser.add_argument("--data_folder", default=os.path.expanduser("~/data/VOCdevkit/VOC2012"), type=str)
 parser.add_argument("--list_folder", default="datasets/voc", type=str)
-parser.add_argument("--work_dir", default="work_dir_voc/temp", type=str)
+parser.add_argument("--work_dir", default="work_dir_voc/fsr", type=str)
 
 parser.add_argument("--num_classes", default=21, type=int)
 parser.add_argument("--input_size", default=448, type=int)
@@ -85,12 +99,14 @@ parser.add_argument("--local_crops_number", type=int, default=0)
 
 # knowledge distillation
 parser.add_argument("--momentum", type=float, default=0.9995,
-                    help="If EMA the entire encoder, set momentum to a small value")
+                    help="If EMA the entire encoder, setting momentum to a small value works")
 
 # masked image modeling parameters
 parser.add_argument("--use_mim", type=str2bool, default=True)
 parser.add_argument("--block_size", type=int, default=64)
 parser.add_argument("--mask_ratio", type=float, default=0.4)
+parser.add_argument("--interpolate_mode", type=str, default="nearest",
+                    help="options: nearest | linear | bilinear | bicubic | trilinear | area | nearest-exact")
 
 parser.add_argument("--w_class", type=float, default=0.1)
 parser.add_argument("--w_patch", type=float, default=0.1)
@@ -250,6 +266,7 @@ def train(args):
     train_transform = MultiviewTransform(
         size1=args.input_size,
         num1=args.global_crops_number,
+        num2=args.local_crops_number,
         use_aa=args.use_aa,
         use_gauss=args.use_gauss,
         use_solar=args.use_solar,
@@ -305,6 +322,8 @@ def train(args):
         student_temp=0.1,
         warmup_epochs=int(args.max_iters / 8),
         epochs=args.max_iters,
+        num_gcrops=args.global_crops_number,
+        num_lcrops=args.local_crops_number,
     ).cuda()
     loss_layer = DenseEnergyLoss(weight=1e-7, sigma_rgb=15, sigma_xy=100, scale_factor=0.5)
 
@@ -326,6 +345,7 @@ def train(args):
             patch_size=16,
             block_size=args.block_size,
             mask_ratio=args.mask_ratio,
+            mode=args.interpolate_mode,
         )
     else:
         mask_generator = None
@@ -363,7 +383,7 @@ def train(args):
         outputs = student(images, mask=mask)
         student_outputs = outputs
         with torch.no_grad():
-            teacher_outputs = teacher(images)
+            teacher_outputs = teacher(images[:2])  # only the 2 global views pass through the teacher
 
         # classification loss
         top_cls_loss = F.multilabel_soft_margin_loss(outputs["top_cls_out"], cls_labels)
@@ -443,6 +463,7 @@ def train(args):
         fsr_cls_loss, fsr_pat_loss = fsr_loss_func(
             teacher_output=teacher_outputs["project_out"],
             student_output=student_outputs["project_out"],
+            student_output2=student_outputs["project_out2"],
             student_mask=mask,
             epoch=n_iter,
         )
@@ -522,19 +543,29 @@ def train(args):
                 tb_logger.add_scalar("schedule/w_patch", w_patch, global_step=global_step)
 
         if (n_iter + 1) % args.eval_iters == 0:
-            save_path = os.path.join(args.ckpt_dir, "model_iter_%d.pth" % (n_iter + 1))
             if args.local_rank == 0:
-                torch.save(student_wo_ddp.state_dict(), save_path)
+                torch.save(student_wo_ddp.state_dict(), os.path.join(args.ckpt_dir, "student.pth"))
+                torch.save(teacher.state_dict(), os.path.join(args.ckpt_dir, "teacher.pth"))
 
             scores, tab_results = validate(student, val_loader, args)
             if args.local_rank == 0:
-                logging.info("cls score: %.4f" % (scores[0]))
-                logging.info("\n" + tab_results)
+                logging.info("[STUDENT] cls score: %.4f" % (scores[0]))
+                logging.info("[STUDENT]\n" + tab_results)
             if tb_logger is not None:
-                tb_logger.add_scalar("val/cls_score", scores[0], global_step=global_step)
-                tb_logger.add_scalar("val/seg_score", scores[1], global_step=global_step)
-                tb_logger.add_scalar("val/cam_score", scores[2], global_step=global_step)
-                tb_logger.add_scalar("val/aux_cam_score", scores[3], global_step=global_step)
+                tb_logger.add_scalar("val/student_cls_score", scores[0], global_step=global_step)
+                tb_logger.add_scalar("val/student_seg_score", scores[1], global_step=global_step)
+                tb_logger.add_scalar("val/student_cam_score", scores[2], global_step=global_step)
+                tb_logger.add_scalar("val/student_aux_cam_score", scores[3], global_step=global_step)
+
+            scores, tab_results = validate(teacher, val_loader, args)
+            if args.local_rank == 0:
+                logging.info("[TEACHER] cls score: %.4f" % (scores[0]))
+                logging.info("[TEACHER]\n" + tab_results)
+            if tb_logger is not None:
+                tb_logger.add_scalar("val/teacher_cls_score", scores[0], global_step=global_step)
+                tb_logger.add_scalar("val/teacher_seg_score", scores[1], global_step=global_step)
+                tb_logger.add_scalar("val/teacher_cam_score", scores[2], global_step=global_step)
+                tb_logger.add_scalar("val/teacher_aux_cam_score", scores[3], global_step=global_step)
 
 
 if __name__ == "__main__":

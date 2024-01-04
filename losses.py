@@ -35,8 +35,8 @@ class FSRLoss(nn.Module):
         self.register_buffer("class_center", torch.zeros(1, out_dim))
         self.register_buffer("patch_center", torch.zeros(1, 1, out_dim))
 
-    def forward(self, teacher_output, student_output, student_mask=None, epoch=None):
-        class_loss = self.forward_class(teacher_output, student_output, student_mask, epoch)
+    def forward(self, teacher_output, student_output, student_output2=None, student_mask=None, epoch=None):
+        class_loss = self.forward_class(teacher_output, student_output, student_output2, epoch)
         patch_loss = self.forward_patch(teacher_output, student_output, student_mask, epoch)
         return class_loss, patch_loss
 
@@ -44,33 +44,43 @@ class FSRLoss(nn.Module):
         if student_mask is None:
             return torch.tensor(0.0).to(student_output.device)
 
-        student_patch = student_output.chunk(2)[1][:, 1:]
+        student_patch = student_output[:, 1:].chunk(2)[1]
         student_value = student_patch / self.student_temp
         with torch.no_grad():
-            teacher_patch = teacher_output.chunk(2)[1][:, 1:]
+            teacher_patch = teacher_output[:, 1:].chunk(2)[1]
             teacher_value = (teacher_patch - self.patch_center) / self.teacher_temp[epoch]
+            teacher_value = F.softmax(teacher_value, dim=-1)
 
         mask = student_mask.chunk(2)[1].float().flatten(1)
-        loss = torch.sum(-F.softmax(teacher_value, dim=-1) * F.log_softmax(student_value, dim=-1), dim=-1)
+        loss = torch.sum(-teacher_value * F.log_softmax(student_value, dim=-1), dim=-1)
         loss = torch.sum(loss * mask, dim=-1) / mask.sum(dim=-1).clamp(min=1.0)
         loss = loss.mean()
 
         self.update_patch_center(teacher_patch)
         return loss
 
-    def forward_class(self, teacher_output, student_output, student_mask=None, epoch=None):
-        student_class = student_output.chunk(2)[1][:, 0]
+    def forward_class(self, teacher_output, student_output, student_output2=None, epoch=None):
+        student_class = student_output[:, 0]
+        if student_output2 is not None:
+            student_class = torch.cat([student_class, student_output2], dim=0)
         student_value = student_class / self.student_temp
-        with torch.no_grad():
-            teacher_class = teacher_output.chunk(2)[0][:, 0]
-            teacher_value = (teacher_class - self.class_center) / self.teacher_temp[epoch]
+        student_value = student_value.chunk(self.num_gcrops + self.num_lcrops)
 
-        loss = torch.sum(-F.softmax(teacher_value, dim=-1) * F.log_softmax(student_value, dim=-1), dim=-1)
-        loss = loss.mean()
+        with torch.no_grad():
+            teacher_class = teacher_output[:, 0].chunk(2)[0]
+            teacher_value = (teacher_class - self.class_center) / self.teacher_temp[epoch]
+            teacher_value = F.softmax(teacher_value, dim=-1)
+
+        total_loss = 0
+        loss_terms = 0
+        for i in range(1, len(student_value)):
+            loss = torch.sum(-teacher_value * F.log_softmax(student_value[i], dim=-1), dim=-1)
+            total_loss += loss.mean()
+            loss_terms += 1
+        total_loss /= loss_terms
 
         self.update_class_center(teacher_class)
-        return loss
-
+        return total_loss
 
     @torch.no_grad()
     def update_patch_center(self, teacher_output):

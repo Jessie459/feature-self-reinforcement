@@ -50,14 +50,22 @@ class WSSSNetwork(nn.Module):
     def forward(self, x, mask=None, cam_only=False):
         multi_views = True if isinstance(x, (tuple, list)) else False
         if multi_views:
-            x = torch.cat(x, dim=0)
-        H, W = x.shape[-2:]
+            x1 = torch.cat(x[:2], dim=0)
+            x2 = torch.cat(x[2:], dim=0) if len(x[2:]) > 0 else None
+        else:
+            x1 = x
+            x2 = None
+        H, W = x1.shape[-2:]
 
-        # encoder
-        top_enc_out, aux_enc_out = self.encoder(x, mask=mask)
-
-        # projector
+        # encoder + projector
+        top_enc_out, aux_enc_out = self.encoder(x1, mask=mask)
         project_out = self.projector(top_enc_out)
+
+        if x2 is not None:
+            top_enc_out2 = self.encoder(x2)[0]
+            project_out2 = self.projector(top_enc_out2[:, 0])
+        else:
+            project_out2 = None
 
         top_enc_out = top_enc_out[:, 1:]  # remove [CLS] token
         if multi_views:  # first view only
@@ -89,6 +97,7 @@ class WSSSNetwork(nn.Module):
             "top_cls_out": top_cls_out,
             "aux_cls_out": aux_cls_out,
             "project_out": project_out,
+            "project_out2": project_out2,
             "seg_out": seg_out,
             "top_cam": top_cam,
             "aux_cam": aux_cam,
