@@ -11,7 +11,7 @@ from PIL import Image
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from datasets import voc
+from datasets import coco
 from models.network import build_model
 from utils import evaluate, imutils
 from utils.dcrf import DenseCRF
@@ -22,16 +22,15 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--checkpoint", type=str, required=True)
 
 parser.add_argument("--backbone", type=str, default="vit_base_patch16_224")
-parser.add_argument("--num_classes", type=int, default=21)
+parser.add_argument("--num_classes", type=int, default=81)
 parser.add_argument("--input_size", type=int, default=448)
 parser.add_argument("--drop_path_rate", type=float, default=0.0)
 parser.add_argument("--cls_depth", type=int, default=2)
 parser.add_argument("--out_dim", type=int, default=4096)
 
-parser.add_argument("--data_folder", type=str, default="~/data/VOCdevkit/VOC2012")
-parser.add_argument("--list_folder", type=str, default="datasets/voc")
+parser.add_argument("--data_folder", type=str, default="~/data/COCO")
+parser.add_argument("--list_folder", type=str, default="datasets/coco")
 parser.add_argument("--infer_set", type=str, default="val")
-parser.add_argument("--ignore_index", type=int, default=255)
 parser.add_argument("--scales", type=float, nargs="+", default=(1.0, 1.25, 1.5))
 
 parser.add_argument("--save_cam", type=str2bool, default=True)
@@ -106,7 +105,7 @@ def main_evaluate(model, data_loader):
         np.save(os.path.join(args.logits_dir, f"{name[0]}.npy"), {"msc_seg": seg.cpu().numpy()})
 
     seg_score = evaluate.scores(gts, seg_pred)
-    print(format_tabs([seg_score], ["seg_pred"], cat_list=voc.class_list))
+    print(format_tabs([seg_score], ["seg_pred"], cat_list=coco.class_list))
     return seg_score
 
 
@@ -166,18 +165,17 @@ def main_crf():
     preds, gts = zip(*results)
 
     crf_score = evaluate.scores(gts, preds)
-    print(format_tabs([crf_score], ["seg_crf"], cat_list=voc.class_list))
+    print(format_tabs([crf_score], ["seg_crf"], cat_list=coco.class_list))
     return crf_score
 
 
 def main():
-    dataset = voc.VOC12SegDataset(
+    dataset = coco.COCOSegDataset(
         root_dir=args.data_folder,
         name_list_dir=args.list_folder,
         split=args.infer_set,
         stage="val",
         aug=False,
-        ignore_index=args.ignore_index,
     )
     data_loader = DataLoader(dataset, batch_size=1)
 

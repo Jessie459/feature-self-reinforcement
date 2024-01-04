@@ -105,8 +105,7 @@ parser.add_argument("--momentum", type=float, default=0.9995,
 parser.add_argument("--use_mim", type=str2bool, default=True)
 parser.add_argument("--block_size", type=int, default=64)
 parser.add_argument("--mask_ratio", type=float, default=0.4)
-parser.add_argument("--interpolate_mode", type=str, default="nearest",
-                    help="options: nearest | linear | bilinear | bicubic | trilinear | area | nearest-exact")
+parser.add_argument("--interpolate_mode", type=str, default="nearest")
 
 parser.add_argument("--w_class", type=float, default=0.1)
 parser.add_argument("--w_patch", type=float, default=0.1)

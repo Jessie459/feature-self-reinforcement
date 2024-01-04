@@ -2,13 +2,95 @@ import os
 
 import imageio
 import numpy as np
+import torchvision.transforms as T
 from PIL import Image
 from torch.utils.data import Dataset
-from torchvision import transforms as T
 
 from . import transforms
 
-class_list = ['_background_', 'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket', 'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch', 'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop', 'mouse', 'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush']
+class_list = [
+    "_background_",
+    "person",
+    "bicycle",
+    "car",
+    "motorcycle",
+    "airplane",
+    "bus",
+    "train",
+    "truck",
+    "boat",
+    "traffic light",
+    "fire hydrant",
+    "stop sign",
+    "parking meter",
+    "bench",
+    "bird",
+    "cat",
+    "dog",
+    "horse",
+    "sheep",
+    "cow",
+    "elephant",
+    "bear",
+    "zebra",
+    "giraffe",
+    "backpack",
+    "umbrella",
+    "handbag",
+    "tie",
+    "suitcase",
+    "frisbee",
+    "skis",
+    "snowboard",
+    "sports ball",
+    "kite",
+    "baseball bat",
+    "baseball glove",
+    "skateboard",
+    "surfboard",
+    "tennis racket",
+    "bottle",
+    "wine glass",
+    "cup",
+    "fork",
+    "knife",
+    "spoon",
+    "bowl",
+    "banana",
+    "apple",
+    "sandwich",
+    "orange",
+    "broccoli",
+    "carrot",
+    "hot dog",
+    "pizza",
+    "donut",
+    "cake",
+    "chair",
+    "couch",
+    "potted plant",
+    "bed",
+    "dining table",
+    "toilet",
+    "tv",
+    "laptop",
+    "mouse",
+    "remote",
+    "keyboard",
+    "cell phone",
+    "microwave",
+    "oven",
+    "toaster",
+    "sink",
+    "refrigerator",
+    "book",
+    "clock",
+    "vase",
+    "scissors",
+    "teddy bear",
+    "hair drier",
+    "toothbrush",
+]
 
 
 def load_cls_label_list(name_list_dir):
@@ -62,13 +144,11 @@ class COCOClsDataset(COCODataset):
         split="train",
         stage="train",
         crop_size=448,
-        num_classes=81,
         ignore_index=255,
         transform=None,
     ):
         super().__init__(root_dir, name_list_dir, split, stage)
         self.crop_size = crop_size
-        self.num_classes = num_classes
         self.ignore_index = ignore_index
 
         self.transform = transform
@@ -94,11 +174,8 @@ class COCOClsDataset(COCODataset):
         pil_image = pil_loader(os.path.join(self.img_dir, self.stage + "2014", name + ".jpg"))
         cls_label = self.cls_label_dict[name]
 
-        # img, img_box = self.transform_image(pil_image)
-
         images = self.transform(pil_image)  # 2 global crops and several local crops
 
-        # return name, img, img_box, cls_label, images
         return name, images, cls_label
 
 
