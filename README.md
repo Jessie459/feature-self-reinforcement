@@ -50,7 +50,7 @@ COCO
 
 ## Requirement
 
-Please refer to requirements.txt
+Please refer to [requirements.txt](https://github.com/Jessie459/feature-self-reinforcement/blob/master/requirements.txt)
 
 Our implementation incorporates a regularization term for segmentation. Please download and compile [the python extension](https://github.com/meng-tang/rloss/tree/master/pytorch#build-python-extension-module).
 
