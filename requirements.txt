@@ -1,0 +1,8 @@
+torch==1.10.1
+torchvision==0.11.2
+numpy==1.24.3
+timm==0.5.4
+pydensecrf==1.0
+texttable==1.7.0
+imageio==2.31.4
+tqdm==4.65.0
