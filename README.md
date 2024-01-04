@@ -1,8 +1,6 @@
 ## Progressive Uncertain Feature Self-reinforcement for Weakly Supervised Semantic Segmentation
 
-This repo is a PyTorch implementation for paper: Progressive Uncertain Feature Self-reinforcement for Weakly Supervised Semantic Segmentation
-
-<img src="assets/overview.png" alt="overview" width="100%"/>
+This repo is a PyTorch implementation for paper: Progressive Feature Self-Reinforcement for Weakly Supervised Semantic Segmentation
 
 ## Data Preparation
 
@@ -62,22 +60,14 @@ Our implementation incorporates a regularization term for segmentation. Please d
 ## Train
 
 ```bash
-bash train_voc.sh
-
-bash train_coco.sh
+CUDA_VISIBLE_DEVICES=0,1,2,3 python -m torch.distributed.launch --nproc_per_node 4 train_voc.py --data_folder [PATH_TO_VOC2012]
 ```
 
 ## Evaluation
 
 ```bash
-bash infer_voc.sh
-
-bash infer_coco.sh
+python infer_voc.py --checkpoint [PATH_TO_CHECKPOINT] --data_folder [PATH_TO_VOC2012] --infer_set [val | test] --save_cam [True | False]
 ```
-
-## Checkpoints
-
-Coming soon. 
 
 ## Acknowledgement
 
